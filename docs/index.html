@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#071018" />
+  <title>Ship Tracker — live AIS</title>
+  <meta name="description" content="Live AIS ship tracker. Baltic positions stream in real time from Fintraffic Digitraffic. Optional global snapshot via aisstream.io." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="28" height="28"><path d="M4 22l12-14 12 14-4 2H8z" fill="#3ee0c9"/><path d="M6 26h20" stroke="#3ee0c9" stroke-width="1.6" opacity=".5"/></svg>
+        </span>
+        <div class="brand-text">
+          <h1>Ship Tracker</h1>
+          <p class="tagline">Live AIS positions</p>
+        </div>
+      </div>
+
+      <div class="status-cluster">
+        <span id="conn-pill" class="pill pill-off" title="Connection status">Connecting</span>
+        <span class="stat"><em id="msg-rate">0</em> msg/s</span>
+        <span class="stat hide-narrow"><em id="vessel-count">0</em> ships</span>
+        <span class="clock" title="Asia/Bangkok (ICT, UTC+7)">
+          <span id="ict-clock">--:--:--</span>
+          <small>ICT</small>
+        </span>
+      </div>
+
+      <div class="top-actions">
+        <button type="button" id="btn-fit" class="icon-btn" title="Fit map to ships">Fit</button>
+        <button type="button" id="btn-table" class="icon-btn hide-wide" title="Show vessel table">Table</button>
+        <button type="button" id="btn-settings" class="icon-btn" title="Settings and sources">Settings</button>
+      </div>
+    </header>
+
+    <div id="demo-banner" class="banner banner-demo hidden" role="status">
+      DEMO MODE — live AIS could not be reached. Positions below are simulated and labelled as demo, not real ships.
+    </div>
+    <div id="coverage-banner" class="banner banner-info">
+      Live coverage is the northern Baltic and Finnish waters (Fintraffic Digitraffic, no key). Other seas have no live positions unless a global snapshot is enabled.
+    </div>
+
+    <section class="kpis" id="type-filters" aria-label="Filter by ship type"></section>
+
+    <div class="workspace">
+      <div class="map-wrap">
+        <div id="map" role="application" aria-label="Live ship map"></div>
+
+        <div class="map-float">
+          <div class="search-box">
+            <input id="search" type="search" placeholder="Search name, MMSI or IMO" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="jumps" id="jumps" aria-label="Quick map jumps"></div>
+        </div>
+
+        <div id="coverage-toast" class="toast hidden" role="status"></div>
+      </div>
+
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-head">
+          <h2>Vessels <span id="table-count" class="muted"></span></h2>
+          <button type="button" id="btn-close-table" class="icon-btn hide-wide" title="Close table">Close</button>
+        </div>
+        <div class="table-scroll">
+          <table class="vessel-table" id="vessel-table">
+            <thead>
+              <tr>
+                <th data-sort="name">Name</th>
+                <th data-sort="cat">Type</th>
+                <th data-sort="flag">Flag</th>
+                <th data-sort="sog">Spd</th>
+                <th data-sort="cog">Crs</th>
+                <th data-sort="destination">Destination</th>
+                <th data-sort="eta">ETA</th>
+                <th data-sort="ts">Updated</th>
+                <th data-sort="dist">Dist</th>
+              </tr>
+            </thead>
+            <tbody id="vessel-tbody"></tbody>
+          </table>
+        </div>
+      </aside>
+    </div>
+
+    <aside id="detail" class="detail hidden" aria-live="polite"></aside>
+  </div>
+
+  <div id="settings-modal" class="modal hidden" role="dialog" aria-labelledby="settings-title">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="settings-title">Sources &amp; settings</h2>
+        <button type="button" id="btn-close-settings" class="icon-btn">Close</button>
+      </div>
+      <div class="modal-body">
+        <h3>What’s live now</h3>
+        <p>The dashboard streams <strong>Fintraffic Digitraffic</strong> AIS over MQTT in your browser. No API key. Coverage is Finnish waters and the northern Baltic (roughly 17–30°E, 58–66°N). Positions are official open data, not invented.</p>
+        <p>A REST snapshot loads first so ships appear immediately; the WebSocket then moves them in real time. Route trails are built from positions received in this session. Digitraffic does not publish a historical track API.</p>
+
+        <h3>Global coverage (optional)</h3>
+        <p><a href="https://aisstream.io/" target="_blank" rel="noopener">aisstream.io</a> offers a free global AIS WebSocket, but it <strong>blocks direct browser connections</strong> (CORS). A key pasted here is stored only in this browser’s localStorage and is never sent to our server. The app will try the stream; if the browser is blocked, you’ll see how to enable a 15-minute GitHub Actions snapshot instead.</p>
+        <label class="field">
+          <span>aisstream.io API key</span>
+          <input id="ais-key" type="password" autocomplete="off" placeholder="Paste key — stored only on this device" />
+        </label>
+        <div class="row-actions">
+          <button type="button" id="btn-save-key" class="btn">Save &amp; try</button>
+          <button type="button" id="btn-clear-key" class="btn btn-ghost">Clear key</button>
+        </div>
+        <p id="ais-key-status" class="note"></p>
+        <ol class="steps">
+          <li>Sign in at <a href="https://aisstream.io/apikeys" target="_blank" rel="noopener">aisstream.io/apikeys</a> with GitHub and create a free API key.</li>
+          <li>Browser use is usually blocked. For a world snapshot every 15 minutes, add the key as repo secret <code>AISSTREAM_API_KEY</code> on <code>piyaster11/ship-tracker</code> (Settings → Secrets and variables → Actions). The included workflow writes <code>snapshot/global.json</code>, which this page will pick up automatically.</li>
+        </ol>
+        <p class="note">Other feeds checked: Norwegian Kystverket is a raw TCP socket (not usable in a browser; outbound port was blocked from our test host). AISHub requires you to contribute your own AIS receiver. CetaHAV’s Baltic HTTP API did not return a body in time.</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <script src="vendor/paho-mqtt.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

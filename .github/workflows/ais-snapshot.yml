@@ -1,0 +1,46 @@
+name: AIS global snapshot
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  snapshot:
+    if: ${{ secrets.AISSTREAM_API_KEY != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install --no-save ws
+      - name: Sample aisstream.io
+        env:
+          AISSTREAM_API_KEY: ${{ secrets.AISSTREAM_API_KEY }}
+          SAMPLE_MS: "25000"
+        run: node .github/scripts/aisstream-snapshot.js /tmp/global.json
+      - name: Publish snapshot branch
+        run: |
+          if [ ! -s /tmp/global.json ]; then
+            echo "No snapshot file; skip"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin snapshot || true
+          work=/tmp/snap-branch
+          rm -rf "$work"
+          mkdir -p "$work"
+          cp /tmp/global.json "$work/global.json"
+          git -C "$work" init
+          git -C "$work" checkout -b snapshot
+          git -C "$work" add global.json
+          git -C "$work" commit -m "AIS snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
+          git -C "$work" remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          # Force-push keeps history on this branch to a single current file
+          git -C "$work" push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" snapshot
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
